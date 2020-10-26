@@ -39,16 +39,6 @@ def graph_original(df):
     st.altair_chart(cht + pts, use_container_width=True)
 
 
-def ramp_original(df):
-
-    with st.beta_expander('FDS RAMP', expanded=False):
-        peak = max(df.HRR)
-        st.code('\n'.join([
-            f"&RAMP ID='HRR_RAMP', T={row.Time:.3f}, F={row.HRR / peak:.3f}/"
-            for row in df.itertuples()
-        ]))
-
-
 def t2_hrr(times: np.array, tv: int, tg: int, qref: int = QREF) -> np.array:
     hrrs = qref * ((times - tv) / tg) ** 2
     hrrs[np.where(times <= tv)] = 0
@@ -58,40 +48,59 @@ def t2_hrr(times: np.array, tv: int, tg: int, qref: int = QREF) -> np.array:
 def find_best(df: pd.DataFrame):
 
     times = df.loc[df.used, 'Time']
+    target = df.loc[df.used, 'HRR']
+
+    iterations = 50
+    guesses = pd.DataFrame([
+        {
+            'tv': tv,
+            'tg': tg,
+            'score': r2_score(target, t2_hrr(times.values, tv=tv, tg=tg))
+        }
+        for tv in np.linspace(0, times.max(), iterations)
+        for tg in np.linspace(1, times.max(), iterations)
+    ])
 
     tv = st.sidebar.slider(
         'Virtual Time',
         min_value=0,
         max_value=int(times.max()),
-        value=0,
+        value=int(guesses.iloc[guesses.idxmax().score].tv),
     )
     tg = st.sidebar.slider(
         'Growth Time',
         min_value=0,
         max_value=int(times.max()),
-        value=int(times.max()),
+        value=int(guesses.iloc[guesses.idxmax().score].tg),
     )
 
-    guess = pd.DataFrame({
+    fit = pd.DataFrame({
         'Time': times,
-        'curve': 'guess',
+        'curve': 'fit',
         'HRR': t2_hrr(times.values, tv=tv, tg=tg),
     })
-    score = r2_score(df.loc[df.used, 'HRR'], guess.HRR)
+    score = r2_score(target, fit.HRR)
 
-    st.latex(r'\dot{Q}=\dot{Q}_{ref}\left(\frac{t-t_v}{t_g}\right)^2')
-    st.latex(
-        f'\\dot{{Q}}={QREF} kW\\left(\\frac{{t-{tv} s}}{{{tg} s}}\\right)^2')
+    st.latex(f'\\dot{{Q}}'
+             f'=\\dot{{Q}}_{{ref}}\\left(\\frac{{t-t_v}}{{t_g}}\\right)^2'
+             f'={QREF} kW\\left(\\frac{{t-{tv} s}}{{{tg} s}}\\right)^2')
     st.latex(f'R^2={{{score:.3f}}}')
 
     cht = alt.Chart(
-        pd.concat([df, guess])
+        pd.concat([df, fit])
     ).mark_line().encode(
         x='Time',
         y='HRR',
         color='curve'
     )
     st.altair_chart(cht, use_container_width=True)
+
+    st.sidebar.markdown(f'''
+    # Results
+    $\\dot{{Q}}_{{max}}$ | $t_v$ | $t_g$
+    :---:|:---:|:---:
+    {df.HRR.max():.0f} kW | {tv} s | {tg} s
+    ''')
 
 
 def main():
@@ -104,6 +113,10 @@ def main():
     if df.empty:
         st.stop()
 
+    units = st.sidebar.radio('Input Units', ['kW', 'BTU/s'])
+    if units == 'BTU/s':
+        df['HRR'] *= (QREF / 1000)
+
     times = st.sidebar.slider(
         't Max',
         min_value=0,
@@ -114,7 +127,6 @@ def main():
     df.loc[(df.Time > times[0]) & (df.Time < times[1]), 'used'] = True
 
     graph_original(df)
-    ramp_original(df)
     find_best(df)
 
 
